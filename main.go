@@ -8,7 +8,7 @@ import (
 )
 
 func main() {
-	test := strings.NewReader("i02e")
+	test := strings.NewReader("d7:meaning7:bencode4:wikii42ee")
 	reff, err := bencode.Decode(test)
 	if err != nil {
 		fmt.Println(err.Error())

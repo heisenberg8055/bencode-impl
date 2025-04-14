@@ -3,6 +3,7 @@ package bencode
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"strconv"
@@ -45,8 +46,72 @@ func unmarshal(data *bufio.Reader) (interface{}, error) {
 			return nil, err
 		}
 		return integer, nil
+	case 'l':
+		list := []interface{}{}
+		for {
+			c, err2 := data.ReadByte()
+			if err2 == nil {
+				if c == 'e' {
+					return list, nil
+				} else {
+					data.UnreadByte()
+				}
+			}
+			value, err := unmarshal(data)
+			if err != nil {
+				return nil, err
+			}
+			list = append(list, value)
+		}
+	case 'd':
+		dictionary := map[string]interface{}{}
+		comp := ""
+		for {
+			c, err2 := data.ReadByte()
+			if err2 == nil {
+				if c == 'e' {
+					return dictionary, nil
+				} else {
+					data.UnreadByte()
+				}
+			}
+			value, err := unmarshal(data)
+			if err != nil {
+				return nil, err
+			}
+			key, ok := value.(string)
+			if !ok {
+				return nil, errors.New("bencode: non-string dictionary key")
+			}
+			if key <= comp {
+				return nil, errors.New("bencode: keys not sorted")
+			}
+			comp = key
+			value, err = unmarshal(data)
+			if err != nil {
+				return nil, err
+			}
+			_, ok = dictionary[key]
+			if ok {
+				return nil, errors.New("bencode: duplicate dictionary key")
+			}
+			dictionary[key] = value
+		}
+	default:
+		data.UnreadByte()
+		stringLengthBuffer, err := optimisticReadBytes(data, ':')
+		if err != nil {
+			return nil, err
+		}
+		stringLengthBuffer = stringLengthBuffer[:len(stringLengthBuffer)-1]
+		stringLength, err := strconv.ParseInt(string(stringLengthBuffer), 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse string length")
+		}
+		buf := make([]byte, stringLength)
+		_, err = readAtLeast(data, buf, int(stringLength))
+		return string(buf), err
 	}
-	return "test", nil
 }
 
 func optimisticReadBytes(data *bufio.Reader, delim byte) ([]byte, error) {
@@ -70,8 +135,22 @@ func optimisticReadBytes(data *bufio.Reader, delim byte) ([]byte, error) {
 	} else if integerBufferLength > 2 && (string(integerbuffer[:2]) == "-0" || string(integerbuffer[:1]) == "0") {
 		return nil, fmt.Errorf("zero integer error")
 	}
-	if err == nil {
-		return integerbuffer, nil
+	return integerbuffer, nil
+}
+
+func readAtLeast(data *bufio.Reader, buf []byte, min int) (n int, err error) {
+	if len(buf) < min {
+		return 0, io.ErrShortBuffer
 	}
-	return data.ReadSlice(delim)
+	for n < min && err == nil {
+		var nn int
+		nn, err = data.Read(buf[n:])
+		n += nn
+	}
+	if n >= min {
+		err = nil
+	} else if n > 0 && err == io.EOF {
+		err = io.ErrUnexpectedEOF
+	}
+	return
 }
